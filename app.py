@@ -438,37 +438,41 @@ def calculate_due_status(due_date_str, due_time_str=None):
         today = date.today()
         now = datetime.now()
         
+        # Format for display with a single icon
+        formatted_date = due_date.strftime('%d %b %Y')  # Format as "19 Apr 2025"
+        
         if due_time_str and pd.notna(due_time_str):
+            formatted_time = due_time_str
             due_datetime = datetime.combine(due_date, datetime.strptime(due_time_str, '%H:%M').time())
             time_diff = due_datetime - now
             
             if time_diff.total_seconds() < 0:
-                return {"color": "#ef4444", "text": "Overdue", "days": abs(time_diff.days)}
+                return {"color": "#ef4444", "text": "Overdue", "days": abs(time_diff.days), "display": f"{formatted_time} • {formatted_date}"}
             elif due_date == today:
                 hours_left = time_diff.total_seconds() / 3600
                 if hours_left < 1:
                     minutes_left = int(time_diff.total_seconds() / 60)
-                    return {"color": "#ef4444", "text": f"Due in {minutes_left} minutes!", "days": 0}
+                    return {"color": "#ef4444", "text": f"Due in {minutes_left} minutes!", "days": 0, "display": f"{formatted_time} • Today"}
                 else:
-                    return {"color": "#f59e0b", "text": f"Due in {int(hours_left)} hours", "days": 0}
+                    return {"color": "#f59e0b", "text": f"Due in {int(hours_left)} hours", "days": 0, "display": f"{formatted_time} • Today"}
             else:
                 days_until_due = (due_date - today).days
                 if days_until_due <= 2:
-                    return {"color": "#f59e0b", "text": f"Due in {days_until_due} days", "days": days_until_due}
+                    return {"color": "#f59e0b", "text": f"Due in {days_until_due} days", "days": days_until_due, "display": f"{formatted_time} • {formatted_date}"}
                 else:
-                    return {"color": "#10b981", "text": f"Due on {due_date_str}", "days": days_until_due}
+                    return {"color": "#10b981", "text": f"Due in {days_until_due} days", "days": days_until_due, "display": f"{formatted_time} • {formatted_date}"}
         else:
             days_until_due = (due_date - today).days
             if days_until_due < 0:
-                return {"color": "#ef4444", "text": "Overdue", "days": abs(days_until_due)}
+                return {"color": "#ef4444", "text": "Overdue", "days": abs(days_until_due), "display": formatted_date}
             elif days_until_due == 0:
-                return {"color": "#f59e0b", "text": "Due Today", "days": 0}
+                return {"color": "#f59e0b", "text": "Due Today", "days": 0, "display": "Today"}
             elif days_until_due <= 2:
-                return {"color": "#f59e0b", "text": f"Due in {days_until_due} days", "days": days_until_due}
+                return {"color": "#f59e0b", "text": f"Due in {days_until_due} days", "days": days_until_due, "display": formatted_date}
             else:
-                return {"color": "#10b981", "text": f"Due in {days_until_due} days", "days": days_until_due}
+                return {"color": "#10b981", "text": f"Due in {days_until_due} days", "days": days_until_due, "display": formatted_date}
     except:
-        return {"color": "#6b7280", "text": "", "days": None}
+        return {"color": "#6b7280", "text": "", "days": None, "display": due_date_str}
 
 def get_urgency_class(due_date_str, due_time_str=None):
     if not due_date_str:
@@ -493,65 +497,129 @@ def create_calendar_view(tasks_df, year, month):
     
     # Create figure with subplots for calendar
     fig = make_subplots(
-        rows=len(cal),
+        rows=len(cal) + 1,  # Add extra row for day names
         cols=7,
-        subplot_titles=[" " for _ in range(len(cal) * 7)],
-        vertical_spacing=0.05,
-        horizontal_spacing=0.01
+        subplot_titles=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] + [" " for _ in range(len(cal) * 7)],
+        vertical_spacing=0.02,
+        horizontal_spacing=0.01,
+        specs=[[{"type": "table"}] * 7] + [[{"type": "scatter"}] * 7] * len(cal)
     )
     
-    # Day names
-    days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    # Convert all due dates to datetime if not already
+    if not pd.api.types.is_datetime64_dtype(tasks_df['due_date']):
+        tasks_df['due_date'] = pd.to_datetime(tasks_df['due_date'], errors='coerce')
     
+    # Filter for the specific month and year
+    month_tasks = tasks_df[
+        (tasks_df['due_date'].dt.month == month) &
+        (tasks_df['due_date'].dt.year == year)
+    ].copy()
+    
+    # Ensure we're working with task dates correctly
+    month_tasks['day'] = month_tasks['due_date'].dt.day
+    
+    # For each day in the calendar
     for week_idx, week in enumerate(cal):
         for day_idx, day in enumerate(week):
-            if day != 0:
+            if day != 0:  # Skip empty days
+                current_date = date(year, month, day)
+                
                 # Get tasks for this day
-                day_date = date(year, month, day)
-                day_tasks = tasks_df[pd.to_datetime(tasks_df['due_date']).dt.date == day_date]
+                day_tasks = month_tasks[month_tasks['day'] == day]
                 
-                # Create text for tasks
-                task_text = "<br>".join([
-                    f"• {row['title']} ({row['status']})"
-                    for _, row in day_tasks.iterrows()
-                ])
+                # Background color based on whether there are tasks
+                bg_color = "#e8f4f8" if not day_tasks.empty else "#d1e7dd"
                 
-                # Add day number and tasks
-                fig.add_trace(
-                    go.Scatter(
-                        x=[0.5],
-                        y=[0.9],
-                        text=f"{day}<br>{task_text}",
-                        mode="text",
-                        hoverinfo="text",
-                        showlegend=False
-                    ),
-                    row=week_idx + 1,
+                # Add cell background
+                fig.add_shape(
+                    type="rect",
+                    x0=0, x1=1, y0=0, y1=1,
+                    line=dict(color="#e1e4e8", width=1),
+                    fillcolor=bg_color,
+                    row=week_idx + 2,  # +2 because of header row
                     col=day_idx + 1
                 )
-            
-            # Add cell border
-            fig.add_shape(
-                type="rect",
-                x0=0, x1=1, y0=0, y1=1,
-                line=dict(color="#e1e4e8", width=1),
-                fillcolor="white" if day != 0 else "#f8f9fa",
-                row=week_idx + 1,
-                col=day_idx + 1
-            )
+                
+                # Add day number
+                fig.add_trace(
+                    go.Scatter(
+                        x=[0.1],
+                        y=[0.9],
+                        text=f"<b>{day}</b>",
+                        mode="text",
+                        textfont=dict(size=14),
+                        hoverinfo="none",
+                        showlegend=False
+                    ),
+                    row=week_idx + 2,
+                    col=day_idx + 1
+                )
+                
+                # Add tasks for this day
+                if not day_tasks.empty:
+                    # Create task text
+                    task_items = []
+                    for _, task in day_tasks.iterrows():
+                        priority_color = get_priority_color(task['priority'])
+                        time_text = f" {task['due_time']}" if pd.notna(task['due_time']) else ""
+                        status_text = f" ({task['status']})" if pd.notna(task['status']) else ""
+                        
+                        task_items.append(
+                            f"<span style='color:{priority_color};'>■</span> "
+                            f"{task['title'][:15]}{'..' if len(task['title']) > 15 else ''}"
+                            f"{time_text}{status_text}"
+                        )
+                    
+                    # Join task items with line breaks
+                    task_text = "<br>".join(task_items[:3])
+                    if len(day_tasks) > 3:
+                        task_text += f"<br>+ {len(day_tasks) - 3} more"
+                    
+                    # Add task list
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[0.1],
+                            y=[0.7],
+                            text=task_text,
+                            mode="text",
+                            textfont=dict(size=10),
+                            hoverinfo="text",
+                            hovertext="<br>".join([
+                                f"{task['title']} - {task['priority']} - {task['status']}"
+                                for _, task in day_tasks.iterrows()
+                            ]),
+                            showlegend=False
+                        ),
+                        row=week_idx + 2,
+                        col=day_idx + 1
+                    )
+            else:
+                # Add grey background for empty days
+                fig.add_shape(
+                    type="rect",
+                    x0=0, x1=1, y0=0, y1=1,
+                    line=dict(color="#e1e4e8", width=1),
+                    fillcolor="#f8f9fa",
+                    row=week_idx + 2,
+                    col=day_idx + 1
+                )
     
     # Update layout
     fig.update_layout(
         height=600,
         showlegend=False,
+        margin=dict(l=0, r=0, t=30, b=0),
         plot_bgcolor='white',
-        paper_bgcolor='white',
-        margin=dict(l=0, r=0, t=30, b=0)
+        paper_bgcolor='white'
     )
     
     # Update axes
-    fig.update_xaxes(showgrid=False, showticklabels=False)
-    fig.update_yaxes(showgrid=False, showticklabels=False)
+    fig.update_xaxes(showgrid=False, showticklabels=False, zeroline=False)
+    fig.update_yaxes(showgrid=False, showticklabels=False, zeroline=False)
+    
+    # Add month/year title
+    month_name = calendar.month_name[month]
+    fig.update_layout(title=f"{month_name} {year}")
     
     return fig
 
@@ -1144,7 +1212,8 @@ if view_type == "Kanban":
                     with title_row:
                         header_col, priority_col, expand_col = st.columns([6, 2, 1])
                         with header_col:
-                            st.markdown(f"**{task['title']}**")
+                            # Convert title to uppercase and make it bold
+                            st.markdown(f"**{task['title'].upper()}**")
                         
                         with priority_col:
                             st.markdown(f"<span style='background-color: {priority_color}; color: white; padding: 2px 6px; border-radius: 12px; font-size: 12px;'>{task['priority']}</span>", unsafe_allow_html=True)
@@ -1155,18 +1224,13 @@ if view_type == "Kanban":
                                 st.session_state[expand_key] = not st.session_state[expand_key]
                                 st.rerun()
                         
-                        # Always show due date in compact format (even when collapsed)
+                        # Show due date outside the expansion block (always visible)
                         if pd.notna(task['due_date']):
-                            due_label = due_status['text'] if due_status['text'] else task['due_date']
-                            st.caption(f"📅 {due_label}")
+                            st.markdown(f"<span style='color: {due_status['color']}; font-size: 0.85em;'>⏱️ {due_status['display']} • <strong>{due_status['text']}</strong></span>", unsafe_allow_html=True)
                     
-                    # Only show details and buttons if expanded
+                    # Only show details and buttons if expanded, but NOT another due date
                     if st.session_state[expand_key]:
-                        # Full due date details
-                        if pd.notna(task['due_date']):
-                            st.markdown(f"<span style='color: {due_status['color']}; font-size: 0.9em;'>📅 {task['due_date']} {f'⏰ {task['due_time']}' if task['due_time'] else ''}</span>", unsafe_allow_html=True)
-                        
-                        # Description preview
+                        # Show description preview (but no due date here since we already show it above)
                         description = task['description'] if task['description'] else "No description provided."
                         st.caption(description)
                         
@@ -1197,6 +1261,136 @@ if view_type == "Kanban":
                     
                     # Add a divider between tasks
                     st.markdown("<hr>", unsafe_allow_html=True)
+elif view_type == "Calendar":
+    # Calendar View Section
+    st.subheader("📅 Calendar View")
+    
+    # Add month/year selector and collapse mode toggle
+    today = date.today()
+    current_month = today.month
+    current_year = today.year
+    
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 4])
+    
+    with col1:
+        selected_month = st.selectbox(
+            "Month",
+            list(range(1, 13)),
+            index=current_month - 1,
+            format_func=lambda m: calendar.month_name[m]
+        )
+    
+    with col2:
+        selected_year = st.selectbox(
+            "Year",
+            list(range(current_year - 1, current_year + 5)),
+            index=1  # Default to current year
+        )
+    
+    with col3:
+        # Initialize collapsed mode in session state if it doesn't exist
+        if 'calendar_collapsed' not in st.session_state:
+            st.session_state.calendar_collapsed = False
+            
+        # Toggle for collapsed view
+        calendar_collapsed = st.toggle("Compact View", value=st.session_state.calendar_collapsed)
+        # Update session state when changed
+        if calendar_collapsed != st.session_state.calendar_collapsed:
+            st.session_state.calendar_collapsed = calendar_collapsed
+    
+    # Get all tasks
+    all_calendar_tasks = tasks_df.copy()
+    
+    # Create a calendar grid
+    monthly_cal = calendar.monthcalendar(selected_year, selected_month)
+    
+    # Display weekday headers with better styling
+    cols = st.columns(7)
+    for i, day_name in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+        with cols[i]:
+            st.markdown(f"<div style='text-align: center; font-weight: bold; background-color: #f0f2f6; padding: 8px; border-radius: 4px;'>{day_name}</div>", unsafe_allow_html=True)
+    
+    # Convert due_date to datetime for comparison
+    calendar_tasks = all_calendar_tasks.copy()
+    calendar_tasks['due_date_parsed'] = pd.to_datetime(calendar_tasks['due_date'], errors='coerce')
+    
+    # Create day-based task dictionary
+    day_task_dict = {}
+    
+    # Loop through all tasks and organize by day
+    for _, task in calendar_tasks.iterrows():
+        if pd.notna(task['due_date_parsed']):
+            task_date = task['due_date_parsed'].date()
+            if task_date.month == selected_month and task_date.year == selected_year:
+                day = task_date.day
+                if day not in day_task_dict:
+                    day_task_dict[day] = []
+                day_task_dict[day].append(task)
+    
+    # Display the calendar grid with tasks
+    for week in monthly_cal:
+        week_cols = st.columns(7)
+        for i, day in enumerate(week):
+            with week_cols[i]:
+                if day != 0:
+                    # Check if there are tasks for this day
+                    day_has_tasks = day in day_task_dict
+                    
+                    if day_has_tasks:
+                        day_tasks = day_task_dict[day]
+                        task_count = len(day_tasks)
+                        
+                        # Day header styled based on whether it has tasks
+                        background_color = "#d1e7dd" if day_has_tasks else "#f8f9fa"
+                        st.markdown(f"<div style='text-align: center; font-weight: bold; background-color: {background_color}; padding: 8px; border-radius: 4px 4px 0 0;'>{day} ({task_count})</div>", unsafe_allow_html=True)
+                        
+                        # In expanded mode, show task details
+                        if not st.session_state.calendar_collapsed:
+                            # Container for tasks
+                            st.markdown("<div style='border: 1px solid #d1e7dd; border-radius: 0 0 4px 4px; padding: 8px;'>", unsafe_allow_html=True)
+                            
+                            # Show tasks for this day
+                            for task in day_tasks[:3]:  # Show up to 3 tasks
+                                # Get priority color for the task
+                                priority = task['priority'] if pd.notna(task['priority']) else "Medium"
+                                priority_color = get_priority_color(priority)
+                                
+                                # Format time if available
+                                time_text = f" {task['due_time']}" if pd.notna(task['due_time']) else ""
+                                
+                                # Show task with styling
+                                st.markdown(
+                                    f"<div style='margin-bottom: 5px; padding: 6px; border-left: 3px solid {priority_color}; background-color: rgba(0,0,0,0.03); border-radius: 3px;'>"
+                                    f"<strong style='font-size: 0.9em;'>{task['title'][:20]}</strong>"
+                                    f"<div style='font-size: 0.75em; color: #666;'>{time_text} • {priority}</div>"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+                            
+                            # Show indicator if there are more tasks
+                            if len(day_tasks) > 3:
+                                st.caption(f"+ {len(day_tasks) - 3} more tasks")
+                            
+                            # Close the container
+                            st.markdown("</div>", unsafe_allow_html=True)
+                        else:
+                            # In collapsed mode, just show a colored bar to indicate tasks
+                            priority_colors = [get_priority_color(task['priority']) for task in day_tasks if pd.notna(task['priority'])]
+                            
+                            if priority_colors:
+                                # Show a small color bar for each priority (up to 3)
+                                st.markdown("<div style='display: flex; gap: 2px; padding: 4px; border: 1px solid #d1e7dd; border-radius: 0 0 4px 4px;'>", unsafe_allow_html=True)
+                                for color in priority_colors[:3]:
+                                    st.markdown(f"<div style='flex-grow: 1; height: 4px; background-color: {color};'></div>", unsafe_allow_html=True)
+                                st.markdown("</div>", unsafe_allow_html=True)
+                            else:
+                                st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
+                    else:
+                        # Empty day
+                        st.markdown(f"<div style='text-align: center; padding: 8px; border: 1px solid #e5e7eb; border-radius: 4px;'>{day}</div>", unsafe_allow_html=True)
+                else:
+                    # Empty day (zero)
+                    st.markdown("<div style='padding: 8px;'></div>", unsafe_allow_html=True)
 
 # Add performance caching for database operations
 @st.cache_data(ttl=5)  # Cache for 5 seconds

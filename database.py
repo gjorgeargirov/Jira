@@ -18,71 +18,94 @@ def init_db():
                   due_time TEXT,
                   position INTEGER,
                   labels TEXT,
-                  last_updated TEXT)''')
+                  parent_id INTEGER,
+                  last_updated TEXT,
+                  FOREIGN KEY (parent_id) REFERENCES tasks(id) ON DELETE CASCADE)''')
     
     conn.commit()
     conn.close()
 
-def add_task(title, description, status, priority, due_date, due_time, labels=""):
+def add_task(title, description, status, priority, due_date, due_time, labels="", parent_id=None):
     """Add a new task to the database."""
     conn = sqlite3.connect('tasks.db')
     c = conn.cursor()
     
-    # Get the maximum position for the current status
-    c.execute('SELECT MAX(position) FROM tasks WHERE status = ?', (status,))
-    max_pos = c.fetchone()[0]
-    position = 1 if max_pos is None else max_pos + 1
-    
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Format the due date and time
-    due_date_str = due_date if isinstance(due_date, str) else due_date.strftime('%Y-%m-%d')
-    due_time_str = due_time if isinstance(due_time, str) else due_time.strftime('%H:%M')
-    
-    c.execute('''INSERT INTO tasks 
-                 (title, description, status, priority, created_date, due_date, due_time, position, labels, last_updated)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-              (title, description, status, priority, now, due_date_str, due_time_str, position, labels, now))
-    
-    conn.commit()
-    conn.close()
+    try:
+        # Get the maximum position for the current status
+        c.execute('SELECT MAX(position) FROM tasks WHERE status = ?', (status,))
+        max_pos = c.fetchone()[0]
+        position = 1 if max_pos is None else max_pos + 1
+        
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Format the due date and time
+        due_date_str = due_date if isinstance(due_date, str) else due_date.strftime('%Y-%m-%d')
+        due_time_str = due_time if isinstance(due_time, str) else due_time.strftime('%H:%M')
+        
+        c.execute('''INSERT INTO tasks 
+                    (title, description, status, priority, created_date, due_date, due_time, position, labels, parent_id, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                (title, description, status, priority, now, due_date_str, due_time_str, position, labels, parent_id, now))
+        
+        task_id = c.lastrowid
+        conn.commit()
+        return task_id
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def get_tasks():
     """Retrieve all tasks from the database."""
     conn = sqlite3.connect('tasks.db')
-    df = pd.read_sql_query('SELECT * FROM tasks', conn)
-    conn.close()
-    
-    # Convert due_date to datetime for proper sorting
-    df['due_date'] = pd.to_datetime(df['due_date'])
-    df['due_time'] = df['due_time'].fillna('')
-    
-    # Create a combined datetime column for sorting
-    df['sort_datetime'] = df.apply(
-        lambda x: pd.to_datetime(f"{x['due_date'].strftime('%Y-%m-%d')} {x['due_time']}")
-        if pd.notna(x['due_date']) and x['due_time']
-        else (x['due_date'] if pd.notna(x['due_date']) else pd.Timestamp.max), 
-        axis=1
-    )
-    
-    # Sort the dataframe
-    df = df.sort_values(
-        by=['status', 'sort_datetime'],
-        key=lambda x: pd.Categorical(x, categories=['To Do', 'In Progress', 'Blocked', 'Done'])
-        if x.name == 'status' else x
-    )
-    
-    # Format due_date back to string for display
-    df['due_date'] = df['due_date'].dt.strftime('%Y-%m-%d')
-    
-    return df
+    try:
+        df = pd.read_sql_query('SELECT * FROM tasks', conn)
+        
+        # Handle empty dataframe case
+        if df.empty:
+            return df
+            
+        # Convert due_date to datetime for proper sorting
+        df['due_date'] = pd.to_datetime(df['due_date'], errors='coerce')
+        df['due_time'] = df['due_time'].fillna('')
+        
+        # Create a combined datetime column for sorting
+        df['sort_datetime'] = df.apply(
+            lambda x: pd.to_datetime(f"{x['due_date'].strftime('%Y-%m-%d')} {x['due_time']}")
+            if pd.notna(x['due_date']) and x['due_time']
+            else (x['due_date'] if pd.notna(x['due_date']) else pd.Timestamp.max), 
+            axis=1
+        )
+        
+        # Sort the dataframe
+        df = df.sort_values(
+            by=['status', 'sort_datetime'],
+            key=lambda x: pd.Categorical(x, categories=['To Do', 'In Progress', 'Blocked', 'Done'])
+            if x.name == 'status' else x
+        )
+        
+        # Format due_date back to string for display
+        df['due_date'] = df['due_date'].dt.strftime('%Y-%m-%d')
+        
+        return df
+    except Exception as e:
+        print(f"Error retrieving tasks: {str(e)}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def get_subtasks(task_id):
     """Retrieve subtasks for a given parent task ID."""
     conn = sqlite3.connect('tasks.db')
-    df = pd.read_sql_query('SELECT * FROM tasks WHERE parent_id = ?', conn, params=[task_id])
-    conn.close()
-    return df
+    try:
+        df = pd.read_sql_query('SELECT * FROM tasks WHERE parent_id = ?', conn, params=[task_id])
+        return df
+    except Exception as e:
+        print(f"Error retrieving subtasks: {str(e)}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
 
 def update_task(task_id, title, description, status, priority, due_date, due_time, labels=""):
     """Update an existing task in the database."""

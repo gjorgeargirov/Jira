@@ -55,6 +55,8 @@ def remove_task(task_id):
     """Delete a task."""
     action_id = f"delete_{task_id}_{int(time.time())}"
     perform_action(action_id, delete_task, task_id)
+    # Set a flag to indicate the task list needs refreshing
+    st.session_state.task_added = True
 
 # Add this function at the beginning of your app.py file, right after the imports
 def delete_task_with_refresh(task_id):
@@ -67,6 +69,9 @@ def delete_task_with_refresh(task_id):
 @st.cache_data(ttl=1)  # Very short TTL to essentially disable caching
 def get_fresh_tasks():
     """Get uncached task data to ensure we see the latest updates"""
+    # Force refresh when task_added flag is set
+    if 'task_added' in st.session_state and st.session_state.task_added:
+        st.cache_data.clear()
     return get_tasks()
 
 # Set page configuration
@@ -115,6 +120,13 @@ init_db()
 # Handle authentication first
 if not login_required():
     st.stop()  # Stop execution if not authenticated
+
+# Check if we just added a task and need to refresh the view
+if 'task_added' in st.session_state and st.session_state.task_added:
+    # Clear the flag
+    st.session_state.task_added = False
+    # Ensure task data is fresh
+    st.cache_data.clear()
 
 # Main application
 st.markdown(f"""
@@ -369,8 +381,13 @@ with st.sidebar:
                             due_time_str,
                             new_labels
                         )
+                        # Force a clear refresh of the data cache
+                        st.cache_data.clear()
+                        # Add a session state flag to indicate a new task was added
+                        st.session_state.task_added = True
                         st.success("✅ Task added successfully!")
-                    st.rerun()
+                        # Ensure rerun happens
+                        st.rerun()
         
         # Cancel button for editing mode
         if is_editing:

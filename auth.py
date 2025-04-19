@@ -6,6 +6,7 @@ import json
 import base64
 import os
 import uuid
+import time
 
 # Create a directory for session tokens if it doesn't exist
 SESSIONS_DIR = "sessions"
@@ -50,12 +51,19 @@ def init_auth_db():
         )
         print("Admin user created")
     else:
-        # Force update admin password to make sure it works
-        c.execute(
-            "UPDATE users SET password = ?, is_admin = 1, last_login = ? WHERE username = 'admin'",
-            (hashed_admin_pw, now)
-        )
-        print("Admin user password reset")
+        # Only update if password is different
+        current_password = admin_user[1]
+        if current_password != hashed_admin_pw:
+            c.execute(
+                "UPDATE users SET password = ?, is_admin = 1, last_login = ? WHERE username = 'admin'",
+                (hashed_admin_pw, now)
+            )
+            print("Admin user password reset")
+        else:
+            # Just ensure admin flag is set without printing
+            c.execute(
+                "UPDATE users SET is_admin = 1 WHERE username = 'admin'"
+            )
     
     conn.commit()
     conn.close()
@@ -304,8 +312,10 @@ def authenticate_user(username, password):
 
 def login_required():
     """Check if user is logged in, if not show login page."""
-    # Initialize authentication database
-    init_auth_db()
+    # Initialize authentication database only once per session
+    if "auth_db_initialized" not in st.session_state:
+        init_auth_db()
+        st.session_state.auth_db_initialized = True
     
     # Initialize session state for authentication
     if "username" not in st.session_state:
@@ -774,28 +784,33 @@ def admin_panel():
                     # Convert checkbox to integer for database
                     admin_value = 1 if is_admin_checkbox else 0
                     
-                    # Update the user in the database
-                    conn = sqlite3.connect('users.db')
-                    c = conn.cursor()
+                    # First update the user details using the proper function
+                    success, message = update_user(
+                        selected_user_id,
+                        username=new_username,
+                        email=new_email,
+                        password=new_password if new_password else None
+                    )
                     
-                    try:
-                        if new_password:
-                            hashed_pw = hash_password(new_password)
-                            c.execute("UPDATE users SET username = ?, email = ?, password = ?, is_admin = ? WHERE id = ?", 
-                                     (new_username, new_email, hashed_pw, admin_value, selected_user_id))
-                        else:
-                            c.execute("UPDATE users SET username = ?, email = ?, is_admin = ? WHERE id = ?", 
-                                     (new_username, new_email, admin_value, selected_user_id))
-                        
-                        conn.commit()
-                        st.success("User updated successfully!")
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Username already exists!")
-                    except Exception as e:
-                        st.error(f"Error: {str(e)}")
-                    finally:
-                        conn.close()
+                    if success:
+                        # Then update the admin status separately
+                        conn = sqlite3.connect('users.db')
+                        c = conn.cursor()
+                        try:
+                            c.execute("UPDATE users SET is_admin = ? WHERE id = ?", 
+                                     (admin_value, selected_user_id))
+                            conn.commit()
+                            
+                            # Force data refresh
+                            st.success("User updated successfully!")
+                            time.sleep(0.5)  # Small delay to ensure changes are committed
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error updating admin status: {str(e)}")
+                        finally:
+                            conn.close()
+                    else:
+                        st.error(message)
                 
                 if delete_button:
                     # Prevent deleting the currently logged-in user
